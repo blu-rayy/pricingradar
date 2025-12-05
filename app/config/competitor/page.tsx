@@ -1,60 +1,83 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { 
-  MarketplaceType, 
-  CompetitorProduct, 
-  InternalProduct, 
+import { useState } from "react";
+import {
+  MarketplaceType,
+  CompetitorProduct,
+  InternalProduct,
   ProductMapping as ProductMappingType,
   AlertThreshold,
-  ConfigWizardState 
-} from '@/lib/scrapers/types';
-import { generateId } from '@/lib/scrapers';
-import { getMarketplaceConfig } from '@/lib/scrapers/marketplaces';
-import { Button, Card } from '@/app/components/ui';
-import { 
-  MarketplaceSelector, 
-  UrlInput, 
-  ProductMapping, 
-  AlertThresholds 
-} from '@/app/components/config';
+  ConfigWizardState,
+} from "@/lib/scrapers/types";
+import { generateId } from "@/lib/scrapers";
+import { getMarketplaceConfig } from "@/lib/scrapers/marketplaces";
+import { Button, Card } from "@/app/components/ui";
+import {
+  MarketplaceSelector,
+  UrlInput,
+  ProductMapping,
+  AlertThresholds,
+} from "@/app/components/config";
 
-type WizardStep = 'marketplace' | 'urls' | 'mappings' | 'alerts' | 'review';
+type WizardStep = "marketplace" | "urls" | "mappings" | "alerts" | "review";
 
 const STEPS: { id: WizardStep; label: string; icon: string }[] = [
-  { id: 'marketplace', label: 'Marketplace', icon: '🏪' },
-  { id: 'urls', label: 'URLs', icon: '🔗' },
-  { id: 'mappings', label: 'Products', icon: '📦' },
-  { id: 'alerts', label: 'Alerts', icon: '🔔' },
-  { id: 'review', label: 'Review', icon: '✅' },
+  { id: "marketplace", label: "Marketplace", icon: "🏪" },
+  { id: "urls", label: "URLs", icon: "🔗" },
+  { id: "mappings", label: "Products", icon: "📦" },
+  { id: "alerts", label: "Alerts", icon: "🔔" },
+  { id: "review", label: "Review", icon: "✅" },
 ];
 
 export default function CompetitorConfigPage() {
-  const [currentStep, setCurrentStep] = useState<WizardStep>('marketplace');
+  const [currentStep, setCurrentStep] = useState<WizardStep>("marketplace");
   const [marketplace, setMarketplace] = useState<MarketplaceType | undefined>();
   const [urls, setUrls] = useState<string[]>([]);
-  const [competitorProducts, setCompetitorProducts] = useState<CompetitorProduct[]>([]);
-  const [internalProducts, setInternalProducts] = useState<InternalProduct[]>([]);
+  const [competitorProducts, setCompetitorProducts] = useState<
+    CompetitorProduct[]
+  >([]);
+  const [internalProducts, setInternalProducts] = useState<InternalProduct[]>(
+    []
+  );
   const [mappings, setMappings] = useState<ProductMappingType[]>([]);
   const [alerts, setAlerts] = useState<AlertThreshold[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
-  const currentStepIndex = STEPS.findIndex(s => s.id === currentStep);
-  const marketplaceConfig = marketplace ? getMarketplaceConfig(marketplace) : null;
+  const currentStepIndex = STEPS.findIndex((s) => s.id === currentStep);
+  const marketplaceConfig = marketplace
+    ? getMarketplaceConfig(marketplace)
+    : null;
 
   // Convert URLs to competitor products when moving from URLs step
+  // Preserves existing product IDs for URLs that haven't changed to maintain mappings
   const handleUrlsComplete = () => {
-    const products: CompetitorProduct[] = urls.map((url, index) => ({
-      id: generateId(),
-      url,
-      name: `Product ${index + 1}`, // Will be updated after scraping
-      marketplace: marketplace!,
-    }));
+    const products: CompetitorProduct[] = urls.map((url, index) => {
+      // Check if this URL already has a product with a stable ID
+      const existingProduct = competitorProducts.find((p) => p.url === url);
+      if (existingProduct) {
+        return existingProduct;
+      }
+      // New URL, generate new product
+      return {
+        id: generateId(),
+        url,
+        name: `Product ${index + 1}`, // Will be updated after scraping
+        marketplace: marketplace!,
+      };
+    });
+
+    // Clear mappings for products that no longer exist (URLs were removed)
+    const newProductIds = new Set(products.map((p) => p.id));
+    const validMappings = mappings.filter((m) =>
+      newProductIds.has(m.competitorProductId)
+    );
+
     setCompetitorProducts(products);
-    setCurrentStep('mappings');
+    setMappings(validMappings);
+    setCurrentStep("mappings");
   };
 
-  const handleAddInternalProduct = (product: Omit<InternalProduct, 'id'>) => {
+  const handleAddInternalProduct = (product: Omit<InternalProduct, "id">) => {
     const newProduct: InternalProduct = {
       ...product,
       id: generateId(),
@@ -65,7 +88,7 @@ export default function CompetitorConfigPage() {
   const handleNext = () => {
     const nextIndex = currentStepIndex + 1;
     if (nextIndex < STEPS.length) {
-      if (currentStep === 'urls') {
+      if (currentStep === "urls") {
         handleUrlsComplete();
       } else {
         setCurrentStep(STEPS[nextIndex].id);
@@ -82,7 +105,7 @@ export default function CompetitorConfigPage() {
 
   const handleSave = async () => {
     setIsSaving(true);
-    
+
     // TODO: Save configuration to database/API
     const config = {
       id: generateId(),
@@ -92,33 +115,33 @@ export default function CompetitorConfigPage() {
       products: competitorProducts,
       productMappings: mappings,
       alertThresholds: alerts,
-      scrapeFrequency: 'daily' as const,
+      scrapeFrequency: "daily" as const,
       isActive: true,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    
-    console.log('Saving configuration:', config);
-    
+
+    console.log("Saving configuration:", config);
+
     // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
     setIsSaving(false);
     // TODO: Redirect to dashboard or show success message
-    alert('Configuration saved successfully!');
+    alert("Configuration saved successfully!");
   };
 
   const canProceed = () => {
     switch (currentStep) {
-      case 'marketplace':
+      case "marketplace":
         return !!marketplace;
-      case 'urls':
+      case "urls":
         return urls.length >= 2;
-      case 'mappings':
+      case "mappings":
         return true; // Optional step
-      case 'alerts':
+      case "alerts":
         return alerts.length > 0;
-      case 'review':
+      case "review":
         return true;
       default:
         return false;
@@ -153,50 +176,63 @@ export default function CompetitorConfigPage() {
             {STEPS.map((step, index) => {
               const isActive = step.id === currentStep;
               const isCompleted = index < currentStepIndex;
-              
+
               return (
                 <div key={step.id} className="flex items-center">
                   <button
-                    onClick={() => index <= currentStepIndex && setCurrentStep(step.id)}
+                    onClick={() =>
+                      index <= currentStepIndex && setCurrentStep(step.id)
+                    }
                     disabled={index > currentStepIndex}
                     className={`
                       flex flex-col items-center gap-2 transition-all
-                      ${index <= currentStepIndex ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}
+                      ${
+                        index <= currentStepIndex
+                          ? "cursor-pointer"
+                          : "cursor-not-allowed opacity-50"
+                      }
                     `}
                   >
                     <div
                       className={`
                         w-12 h-12 rounded-full flex items-center justify-center text-xl
                         transition-all duration-300
-                        ${isActive 
-                          ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-110' 
-                          : isCompleted 
-                            ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-600 dark:text-emerald-400' 
-                            : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400'
+                        ${
+                          isActive
+                            ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-110"
+                            : isCompleted
+                            ? "bg-emerald-100 dark:bg-emerald-900/50 text-emerald-600 dark:text-emerald-400"
+                            : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400"
                         }
                       `}
                     >
-                      {isCompleted ? '✓' : step.icon}
+                      {isCompleted ? "✓" : step.icon}
                     </div>
-                    <span className={`
+                    <span
+                      className={`
                       text-xs font-medium
-                      ${isActive 
-                        ? 'text-emerald-600 dark:text-emerald-400' 
-                        : 'text-zinc-500 dark:text-zinc-400'
+                      ${
+                        isActive
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : "text-zinc-500 dark:text-zinc-400"
                       }
-                    `}>
+                    `}
+                    >
                       {step.label}
                     </span>
                   </button>
-                  
+
                   {index < STEPS.length - 1 && (
-                    <div className={`
+                    <div
+                      className={`
                       w-12 md:w-24 h-0.5 mx-2
-                      ${index < currentStepIndex 
-                        ? 'bg-emerald-500' 
-                        : 'bg-zinc-200 dark:bg-zinc-700'
+                      ${
+                        index < currentStepIndex
+                          ? "bg-emerald-500"
+                          : "bg-zinc-200 dark:bg-zinc-700"
                       }
-                    `} />
+                    `}
+                    />
                   )}
                 </div>
               );
@@ -206,14 +242,14 @@ export default function CompetitorConfigPage() {
 
         {/* Step Content */}
         <Card variant="elevated" padding="lg" className="mb-6">
-          {currentStep === 'marketplace' && (
+          {currentStep === "marketplace" && (
             <MarketplaceSelector
               selected={marketplace}
               onSelect={setMarketplace}
             />
           )}
 
-          {currentStep === 'urls' && marketplace && (
+          {currentStep === "urls" && marketplace && (
             <UrlInput
               marketplace={marketplace}
               urls={urls}
@@ -221,7 +257,7 @@ export default function CompetitorConfigPage() {
             />
           )}
 
-          {currentStep === 'mappings' && (
+          {currentStep === "mappings" && (
             <ProductMapping
               competitorProducts={competitorProducts}
               internalProducts={internalProducts}
@@ -231,14 +267,11 @@ export default function CompetitorConfigPage() {
             />
           )}
 
-          {currentStep === 'alerts' && (
-            <AlertThresholds
-              alerts={alerts}
-              onAlertsChange={setAlerts}
-            />
+          {currentStep === "alerts" && (
+            <AlertThresholds alerts={alerts} onAlertsChange={setAlerts} />
           )}
 
-          {currentStep === 'review' && (
+          {currentStep === "review" && (
             <div className="space-y-6">
               <div>
                 <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
@@ -251,7 +284,9 @@ export default function CompetitorConfigPage() {
 
               <div className="grid gap-4">
                 <div className="p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg">
-                  <div className="text-sm text-zinc-500 dark:text-zinc-400">Marketplace</div>
+                  <div className="text-sm text-zinc-500 dark:text-zinc-400">
+                    Marketplace
+                  </div>
                   <div className="font-medium text-zinc-900 dark:text-zinc-100 flex items-center gap-2 mt-1">
                     <span>{marketplaceConfig?.icon}</span>
                     {marketplaceConfig?.name}
@@ -259,13 +294,18 @@ export default function CompetitorConfigPage() {
                 </div>
 
                 <div className="p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg">
-                  <div className="text-sm text-zinc-500 dark:text-zinc-400">Tracking URLs</div>
+                  <div className="text-sm text-zinc-500 dark:text-zinc-400">
+                    Tracking URLs
+                  </div>
                   <div className="font-medium text-zinc-900 dark:text-zinc-100 mt-1">
                     {urls.length} product URLs
                   </div>
                   <ul className="mt-2 space-y-1">
                     {urls.map((url, i) => (
-                      <li key={i} className="text-xs text-zinc-500 dark:text-zinc-400 truncate">
+                      <li
+                        key={i}
+                        className="text-xs text-zinc-500 dark:text-zinc-400 truncate"
+                      >
                         {url}
                       </li>
                     ))}
@@ -273,23 +313,32 @@ export default function CompetitorConfigPage() {
                 </div>
 
                 <div className="p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg">
-                  <div className="text-sm text-zinc-500 dark:text-zinc-400">Product Mappings</div>
+                  <div className="text-sm text-zinc-500 dark:text-zinc-400">
+                    Product Mappings
+                  </div>
                   <div className="font-medium text-zinc-900 dark:text-zinc-100 mt-1">
                     {mappings.length} products mapped
                   </div>
                 </div>
 
                 <div className="p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg">
-                  <div className="text-sm text-zinc-500 dark:text-zinc-400">Alert Rules</div>
+                  <div className="text-sm text-zinc-500 dark:text-zinc-400">
+                    Alert Rules
+                  </div>
                   <div className="font-medium text-zinc-900 dark:text-zinc-100 mt-1">
-                    {alerts.filter(a => a.enabled).length} active alerts
+                    {alerts.filter((a) => a.enabled).length} active alerts
                   </div>
                   <ul className="mt-2 space-y-1">
-                    {alerts.filter(a => a.enabled).map((alert) => (
-                      <li key={alert.id} className="text-xs text-zinc-500 dark:text-zinc-400">
-                        • {alert.name}
-                      </li>
-                    ))}
+                    {alerts
+                      .filter((a) => a.enabled)
+                      .map((alert) => (
+                        <li
+                          key={alert.id}
+                          className="text-xs text-zinc-500 dark:text-zinc-400"
+                        >
+                          • {alert.name}
+                        </li>
+                      ))}
                   </ul>
                 </div>
               </div>
@@ -304,24 +353,54 @@ export default function CompetitorConfigPage() {
             onClick={handleBack}
             disabled={currentStepIndex === 0}
           >
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            <svg
+              className="w-4 h-4 mr-2"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 19l-7-7 7-7"
+              />
             </svg>
             Back
           </Button>
 
-          {currentStep === 'review' ? (
+          {currentStep === "review" ? (
             <Button onClick={handleSave} loading={isSaving}>
               Save Configuration
-              <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              <svg
+                className="w-4 h-4 ml-2"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 13l4 4L19 7"
+                />
               </svg>
             </Button>
           ) : (
             <Button onClick={handleNext} disabled={!canProceed()}>
               Continue
-              <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              <svg
+                className="w-4 h-4 ml-2"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 5l7 7-7 7"
+                />
               </svg>
             </Button>
           )}
@@ -330,4 +409,3 @@ export default function CompetitorConfigPage() {
     </div>
   );
 }
-

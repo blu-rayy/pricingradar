@@ -49,10 +49,13 @@ export function ProductMapping({
   const handleAddProduct = () => {
     if (!newProduct.sku || !newProduct.name || !newProduct.currentPrice) return;
     
+    const parsedPrice = parseFloat(newProduct.currentPrice);
+    if (isNaN(parsedPrice) || parsedPrice <= 0) return;
+    
     onAddInternalProduct({
       sku: newProduct.sku,
       name: newProduct.name,
-      currentPrice: parseFloat(newProduct.currentPrice),
+      currentPrice: parsedPrice,
       currency: newProduct.currency,
     });
     
