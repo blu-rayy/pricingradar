@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { AlertTriangle, TrendingUp, TrendingDown, DollarSign, Activity, RefreshCw, ArrowRight, Search, Menu, X, CheckCircle } from 'lucide-react';
 
@@ -156,21 +157,25 @@ const AlertCard: React.FC<AlertCardProps> = ({ product, variance, competitor, on
           <p className="text-sm text-slate-600 mt-1">
             <span className="font-medium">{competitor.name}</span> dropped price to <span className="font-bold text-slate-900">${competitor.price}</span> (You: ${product.myPrice}).
           </p>
-          <div className="flex items-center gap-2 mt-2 text-xs font-medium text-slate-500 bg-slate-50 px-2 py-1 rounded w-fit">
-            <Activity className="w-3 h-3" /> Suggested Action: {suggestedAction}
-          </div>
+          
         </div>
       </div>
-      <div className="flex gap-2 self-end md:self-auto">
+      <div className="flex items-center gap-3 self-end md:self-auto">
         <button 
           onClick={onDismiss}
           className="px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 rounded transition-colors"
         >
           Dismiss
         </button>
-        <button className="px-3 py-1.5 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded shadow-sm transition-colors flex items-center gap-1">
-          Apply Price Change <ArrowRight className="w-3 h-3" />
-        </button>
+        <div className="ml-4 px-3 py-2 bg-slate-50 border border-slate-100 rounded-md text-sm text-slate-700 max-w-[480px]">
+          <div className="flex items-start gap-2">
+            <Activity className="w-4 h-4 text-slate-500 mt-0.5" />
+            <div>
+              <div className="text-xs text-slate-500">Suggested Action</div>
+              <div className="text-sm font-medium">{suggestedAction}</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -286,15 +291,19 @@ export default function Dashboard() {
             </h1>
           </div>
           <div className="flex items-center gap-4">
-            <button 
+            <Link
+              href="/configure"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-slate-900 text-white hover:bg-slate-800 shadow-sm"
+            >
+              Configure
+            </Link>
+            <button
               onClick={handleScan}
               disabled={isScanning}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all
-                ${isScanning ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-slate-800 shadow-sm hover:shadow'}
-              `}
+              title="Refresh now"
+              className={`ml-2 inline-flex items-center justify-center w-10 h-10 rounded-lg transition-colors ${isScanning ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-white text-slate-700 hover:bg-slate-50'}`}
             >
-              <RefreshCw className={`w-4 h-4 ${isScanning ? 'animate-spin' : ''}`} />
-              {isScanning ? 'Scanning Market...' : 'Run Manual Scan'}
+              <RefreshCw className={`${isScanning ? 'animate-spin' : ''} w-5 h-5`} />
             </button>
             <div className="h-8 w-8 rounded-full bg-slate-200 flex items-center justify-center border border-slate-300">
               <span className="text-xs font-bold text-slate-600">GR</span>

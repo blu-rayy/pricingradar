@@ -1,0 +1,12 @@
+[
+  {
+    "id": "comp-a",
+    "name": "Competitor A",
+    "baseUrl": "https://mock.comp-a.test/product/"
+  },
+  {
+    "id": "comp-b",
+    "name": "Competitor B",
+    "baseUrl": "https://mock.comp-b.test/items/"
+  }
+]
