@@ -40,11 +40,8 @@ export class WatsonsScraper extends BaseScraper {
 
     console.log(`[Watsons] Navigating to: ${url}`);
 
-    // Use domcontentloaded as Watsons is slow to fully load
-    await this.page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: 60000,
-    });
+    // Use navigateTo for retry logic - Watsons is slow so use domcontentloaded
+    await this.navigateTo(url, 3, "domcontentloaded");
 
     // Wait for dynamic content to load (Watsons uses Angular)
     console.log("[Watsons] Waiting for dynamic content...");
