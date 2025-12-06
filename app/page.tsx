@@ -114,28 +114,146 @@ function calculatePricePerUnit(price: number, quantity: number): number {
   return Math.round((price / quantity) * 100) / 100; // Round to 2 decimal places
 }
 
-// --- MOCK DATA GENERATORS ---
+// --- CACHED DATA TYPES & TRANSFORM ---
 
-const GENERATE_HISTORY = (): HistoryData[] => {
-  const data: HistoryData[] = [];
-  const today = new Date();
-  for (let i = 30; i >= 0; i--) {
-    const date = new Date(today);
-    date.setDate(date.getDate() - i);
-    data.push({
-      date: date.toISOString().split("T")[0],
-      myPrice: 299,
-      amazonPrice: 299 - Math.random() * 20,
-      bestbuyPrice: 305 - Math.random() * 10,
+interface CachedProduct {
+  id: string;
+  name: string;
+  brand: string | null;
+  dosage: string | null;
+  url: string;
+  marketplace: string;
+  price: number;
+  originalPrice: number | null;
+  discountPercent: number | null;
+  inStock: boolean;
+  quantity: number;
+  pricePerUnit: number;
+  scrapedAt: string | null;
+}
+
+// Transform cached products from DB into UI Product format
+// Groups products by name similarity and creates Competitor entries
+function transformCachedProducts(cachedProducts: CachedProduct[]): Product[] {
+  // Group by marketplace
+  const medsgo = cachedProducts.filter(
+    (p) => p.marketplace.toLowerCase() === "medsgo"
+  );
+  const watsons = cachedProducts.filter(
+    (p) => p.marketplace.toLowerCase() === "watsons"
+  );
+
+  // Helper to normalize and tokenize names for matching
+  const normalize = (s: string) =>
+    (s || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const tokens = (s: string) =>
+    Array.from(new Set(normalize(s).split(" ").filter(Boolean)));
+
+  const usedWatsons = new Set<string>();
+  const mapped: Product[] = [];
+  let idx = 1;
+
+  // Match MedsGo products with Watsons products
+  for (const m of medsgo) {
+    const mTokens = tokens(m.name);
+    let best: CachedProduct | null = null;
+    let bestScore = 0;
+
+    for (const w of watsons) {
+      if (usedWatsons.has(w.id)) continue;
+      const wTokens = tokens(w.name);
+      const common = mTokens.filter((t) => wTokens.includes(t));
+      const score = common.length;
+      if (score > bestScore) {
+        bestScore = score;
+        best = w;
+      }
+    }
+
+    const competitors: Competitor[] = [];
+    competitors.push({
+      name: "medsgo",
+      price: m.price,
+      pricePerUnit: m.pricePerUnit,
+      quantity: m.quantity,
+      url: m.url,
+      marketplace: "medsgo",
+      brand: m.brand || undefined,
+      dosage: m.dosage || undefined,
+    });
+
+    if (best && bestScore >= Math.max(1, Math.floor(mTokens.length / 3))) {
+      usedWatsons.add(best.id);
+      competitors.push({
+        name: "watsons",
+        price: best.price,
+        pricePerUnit: best.pricePerUnit,
+        quantity: best.quantity,
+        url: best.url,
+        marketplace: "watsons",
+        brand: best.brand || undefined,
+        dosage: best.dosage || undefined,
+      });
+    }
+
+    const marketAvg =
+      competitors.reduce((s, c) => s + (c.pricePerUnit || c.price || 0), 0) /
+      Math.max(1, competitors.length);
+
+    mapped.push({
+      id: `c-${idx++}`,
+      name: m.name,
+      sku: m.id,
+      myPrice: Math.round(marketAvg * 100) / 100,
+      competitors,
+      history: GENERATE_HISTORY_FROM_COMPETITORS(competitors),
+      status:
+        competitors.length > 1
+          ? Math.min(...competitors.map((c) => c.price)) < marketAvg * 0.95
+            ? "Critical"
+            : "Stable"
+          : "Monitoring",
     });
   }
-  // Simulate a recent drop for Amazon
-  if (data.length > 0) {
-    data[data.length - 1].amazonPrice = 265;
-    data[data.length - 2].amazonPrice = 270;
+
+  // Add remaining unmatched Watsons products
+  for (const w of watsons) {
+    if (usedWatsons.has(w.id)) continue;
+    const competitors: Competitor[] = [
+      {
+        name: "watsons",
+        price: w.price,
+        pricePerUnit: w.pricePerUnit,
+        quantity: w.quantity,
+        url: w.url,
+        marketplace: "watsons",
+        brand: w.brand || undefined,
+        dosage: w.dosage || undefined,
+      },
+    ];
+    const marketAvg =
+      competitors.reduce((s, c) => s + (c.pricePerUnit || c.price || 0), 0) /
+      Math.max(1, competitors.length);
+
+    mapped.push({
+      id: `c-${idx++}`,
+      name: w.name,
+      sku: w.id,
+      myPrice: Math.round(marketAvg * 100) / 100,
+      competitors,
+      history: GENERATE_HISTORY_FROM_COMPETITORS(competitors),
+      status: "Monitoring",
+    });
   }
-  return data;
-};
+
+  return mapped;
+}
+
+// --- HISTORY GENERATOR ---
 
 // Generate a synthetic 30-day history from current competitor prices
 const GENERATE_HISTORY_FROM_COMPETITORS = (
@@ -183,130 +301,7 @@ const GENERATE_HISTORY_FROM_COMPETITORS = (
   return data;
 };
 
-const INITIAL_PRODUCTS: Product[] = [
-  {
-    id: 1,
-    name: "Sony WH-1000XM5 Headphones",
-    sku: "SNY-XM5-BLK",
-    myPrice: 299.0,
-    competitors: [
-      { name: "Amazon", price: 265.0, url: "#" },
-      { name: "BestBuy", price: 299.99, url: "#" },
-      { name: "Walmart", price: 289.0, url: "#" },
-    ],
-    history: GENERATE_HISTORY(),
-    category: "Audio",
-    status: "Critical",
-  },
-  {
-    id: 2,
-    name: "Logitech MX Master 3S",
-    sku: "LOG-MX3S-GRY",
-    myPrice: 99.0,
-    competitors: [
-      { name: "Amazon", price: 99.0, url: "#" },
-      { name: "BestBuy", price: 105.0, url: "#" },
-      { name: "Walmart", price: 95.0, url: "#" },
-    ],
-    history: GENERATE_HISTORY().map((d) => ({
-      ...d,
-      myPrice: 99,
-      amazonPrice: 99,
-      bestbuyPrice: 105,
-    })),
-    category: "Peripherals",
-    status: "Stable",
-  },
-  {
-    id: 3,
-    name: "Samsung T7 Shield 2TB SSD",
-    sku: "SAM-T7-2TB",
-    myPrice: 160.0,
-    competitors: [
-      { name: "Amazon", price: 175.0, url: "#" },
-      { name: "BestBuy", price: 179.0, url: "#" },
-      { name: "Walmart", price: 180.0, url: "#" },
-    ],
-    history: GENERATE_HISTORY().map((d) => ({
-      ...d,
-      myPrice: 160,
-      amazonPrice: 175,
-      bestbuyPrice: 179,
-    })),
-    category: "Storage",
-    status: "Winning",
-  },
-];
-
-// Demo side-by-side comparison data (used when no live MedsGo+Watsons intersection)
-const SAMPLE_COMPARE: Product[] = [
-  {
-    id: "demo-1",
-    name: "Sildenafil 50mg - 1 Box x 8 Tabs (Erecfil 50)",
-    sku: "demo-sild-50-8",
-    competitors: [
-      {
-        name: "medsgo",
-        marketplace: "medsgo",
-        price: 680,
-        quantity: 8,
-        pricePerUnit: 85,
-      },
-      {
-        name: "watsons",
-        marketplace: "watsons",
-        price: 835,
-        quantity: 1,
-        pricePerUnit: 835,
-      },
-    ],
-    status: "Monitoring",
-  },
-  {
-    id: "demo-2",
-    name: "Sildenafil 100mg - 1 Box x 10 Tabs (Spiagra 100)",
-    sku: "demo-sild-100-10",
-    competitors: [
-      {
-        name: "medsgo",
-        marketplace: "medsgo",
-        price: 950,
-        quantity: 10,
-        pricePerUnit: 95,
-      },
-      {
-        name: "watsons",
-        marketplace: "watsons",
-        price: 1002.5,
-        quantity: 1,
-        pricePerUnit: 1002.5,
-      },
-    ],
-    status: "Monitoring",
-  },
-  {
-    id: "demo-3",
-    name: "Tadalafil 20mg - 1 Tablet (Dalafil)",
-    sku: "demo-tada-20",
-    competitors: [
-      {
-        name: "medsgo",
-        marketplace: "medsgo",
-        price: 90,
-        quantity: 1,
-        pricePerUnit: 90,
-      },
-      {
-        name: "watsons",
-        marketplace: "watsons",
-        price: 985.25,
-        quantity: 1,
-        pricePerUnit: 985.25,
-      },
-    ],
-    status: "Monitoring",
-  },
-];
+// No hardcoded data - all products come from the database
 
 // --- COMPONENTS ---
 
@@ -490,9 +485,10 @@ const ProductChart: React.FC<{ product: Product | null }> = ({ product }) => {
 };
 
 export default function Dashboard() {
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
+  const [products, setProducts] = useState<Product[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isScanning, setIsScanning] = useState<boolean>(false);
+  const [isLoadingCached, setIsLoadingCached] = useState<boolean>(true);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [lastScanAt, setLastScanAt] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "alerts">("overview");
@@ -719,8 +715,34 @@ export default function Dashboard() {
     }
   };
 
-  // Run an initial scan on mount to populate the main UI with scraped data
+  // Load cached data first, then run background scrape
   useEffect(() => {
+    // 1. First, load cached data from DB (fast)
+    const loadCachedData = async () => {
+      try {
+        const res = await fetch("/api/products");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.products?.length > 0) {
+            const transformed = transformCachedProducts(data.products);
+            if (transformed.length > 0) {
+              setProducts(transformed);
+              if (data.lastScrapedAt) {
+                setLastScanAt(data.lastScrapedAt);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load cached data:", err);
+      } finally {
+        setIsLoadingCached(false);
+      }
+    };
+
+    loadCachedData();
+
+    // 2. Then trigger background scrape to get fresh data
     handleScan();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -748,7 +770,8 @@ export default function Dashboard() {
       maximumFractionDigits: 2,
     }).format(val);
 
-  // Precompute display rows for MedsGo/Watsons comparison to avoid an IIFE inside JSX
+  // Precompute display rows for MedsGo/Watsons comparison
+  // Show products that have both marketplaces first, then all products
   const medsgoWatsonsFiltered = products.filter((p) => {
     const names = (p.competitors || []).map((c) =>
       (c.marketplace || "").toLowerCase()
@@ -756,7 +779,7 @@ export default function Dashboard() {
     return names.includes("medsgo") && names.includes("watsons");
   });
   const tableDisplay =
-    medsgoWatsonsFiltered.length > 0 ? medsgoWatsonsFiltered : SAMPLE_COMPARE;
+    medsgoWatsonsFiltered.length > 0 ? medsgoWatsonsFiltered : products;
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
@@ -829,14 +852,42 @@ export default function Dashboard() {
               )}
             </button>
           </div>
-          <div className="text-sm text-slate-500">
-            Last scan:{" "}
-            {lastScanAt ? new Date(lastScanAt).toLocaleString() : "never"}
+          <div className="text-sm text-slate-500 flex items-center gap-2">
+            {isLoadingCached ? (
+              <span className="flex items-center gap-1">
+                <RefreshCw className="w-3 h-3 animate-spin" />
+                Loading cached data...
+              </span>
+            ) : isScanning ? (
+              <span className="flex items-center gap-1">
+                <RefreshCw className="w-3 h-3 animate-spin text-blue-500" />
+                <span className="text-blue-600">Refreshing prices...</span>
+              </span>
+            ) : (
+              <span>
+                Last scan:{" "}
+                {lastScanAt ? new Date(lastScanAt).toLocaleString() : "never"}
+              </span>
+            )}
           </div>
         </div>
 
         {activeTab === "overview" && (
           <>
+            {/* LOADING / REFRESH BANNER */}
+            {isLoadingCached && (
+              <div className="mb-4 p-3 bg-slate-100 border border-slate-200 rounded-lg flex items-center gap-2 text-sm text-slate-600">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Loading cached prices from database...
+              </div>
+            )}
+            {!isLoadingCached && isScanning && (
+              <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-lg flex items-center gap-2 text-sm text-blue-700">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Refreshing prices from MedsGo and Watsons in the background...
+              </div>
+            )}
+
             {/* KPI SECTION */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
               <KpiCard
@@ -905,6 +956,40 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
+                  {tableDisplay.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center">
+                        <div className="text-slate-400">
+                          {isLoadingCached ? (
+                            <div className="flex flex-col items-center gap-2">
+                              <RefreshCw className="w-6 h-6 animate-spin" />
+                              <span>Loading products from database...</span>
+                            </div>
+                          ) : isScanning ? (
+                            <div className="flex flex-col items-center gap-2">
+                              <RefreshCw className="w-6 h-6 animate-spin text-blue-500" />
+                              <span className="text-blue-600">
+                                Scraping prices from MedsGo and Watsons...
+                              </span>
+                              <span className="text-sm">
+                                This may take a minute on first load.
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center gap-2">
+                              <span>No products found.</span>
+                              <button
+                                onClick={handleScan}
+                                className="mt-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-800"
+                              >
+                                Scan for Products
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                   {tableDisplay.map((product, idx) => {
                     const medsgo = product.competitors.find(
                       (c) => (c.marketplace || "").toLowerCase() === "medsgo"
