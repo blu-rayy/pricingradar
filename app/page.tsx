@@ -31,8 +31,8 @@ import {
 interface HistoryData {
   date: string;
   myPrice?: number;
-  amazonPrice?: number;
-  bestbuyPrice?: number;
+  medsgoPrice?: number;
+  watsonsPrice?: number;
 }
 
 interface Competitor {
@@ -271,11 +271,17 @@ const GENERATE_HISTORY_FROM_COMPETITORS = (
     (c) =>
       (c.marketplace || c.name || "").toString().toLowerCase() === "watsons"
   );
-  const baseMed = medsgo ? medsgo.price : competitors[0]?.price ?? 0;
-  const baseWat = watsons ? watsons.price : competitors[1]?.price ?? baseMed;
+  // Use pricePerUnit for fair comparison (e.g., ₱85/tablet instead of ₱680/pack)
+  const baseMed = medsgo
+    ? medsgo.pricePerUnit || medsgo.price
+    : competitors[0]?.pricePerUnit ?? competitors[0]?.price ?? 0;
+  const baseWat = watsons
+    ? watsons.pricePerUnit || watsons.price
+    : competitors[1]?.pricePerUnit ?? competitors[1]?.price ?? baseMed;
   const marketAvg =
     competitors.length > 0
-      ? competitors.reduce((s, c) => s + (c.price || 0), 0) / competitors.length
+      ? competitors.reduce((s, c) => s + (c.pricePerUnit || c.price || 0), 0) /
+        competitors.length
       : (baseMed + baseWat) / 2;
 
   for (let i = days; i >= 0; i--) {
@@ -437,7 +443,7 @@ const ProductChart: React.FC<{ product: Product | null }> = ({ product }) => {
             fontSize={12}
             tickLine={false}
             axisLine={false}
-            tickFormatter={(val: number) => `$${val}`}
+            tickFormatter={(val: number) => `₱${val}`}
           />
           <Tooltip
             contentStyle={{
@@ -452,30 +458,29 @@ const ProductChart: React.FC<{ product: Product | null }> = ({ product }) => {
             product.history.some((d) => typeof d.myPrice === "number") && (
               <Line
                 type="monotone"
-                name="My Price"
+                name="Market Avg"
                 dataKey="myPrice"
-                stroke="#3b82f6"
-                strokeWidth={3}
+                stroke="#64748b"
+                strokeWidth={2}
+                strokeDasharray="3 3"
                 dot={false}
-                activeDot={{ r: 6 }}
+                activeDot={{ r: 4 }}
               />
             )}
           <Line
             type="monotone"
-            name="Amazon"
-            dataKey="amazonPrice"
-            stroke="#ef4444"
+            name="MedsGo"
+            dataKey="medsgoPrice"
+            stroke="#7c3aed"
             strokeWidth={2}
-            strokeDasharray="5 5"
             dot={false}
           />
           <Line
             type="monotone"
-            name="BestBuy"
-            dataKey="bestbuyPrice"
-            stroke="#10b981"
+            name="Watsons"
+            dataKey="watsonsPrice"
+            stroke="#0284c7"
             strokeWidth={2}
-            strokeDasharray="5 5"
             dot={false}
           />
         </LineChart>
