@@ -31,8 +31,8 @@ import {
 interface HistoryData {
   date: string;
   myPrice?: number;
-  amazonPrice?: number;
-  bestbuyPrice?: number;
+  medsgoPrice?: number;
+  watsonsPrice?: number;
 }
 
 interface Competitor {
@@ -114,53 +114,190 @@ function calculatePricePerUnit(price: number, quantity: number): number {
   return Math.round((price / quantity) * 100) / 100; // Round to 2 decimal places
 }
 
-// --- MOCK DATA GENERATORS ---
+// --- CACHED DATA TYPES & TRANSFORM ---
 
-const GENERATE_HISTORY = (): HistoryData[] => {
-  const data: HistoryData[] = [];
-  const today = new Date();
-  for (let i = 30; i >= 0; i--) {
-    const date = new Date(today);
-    date.setDate(date.getDate() - i);
-    data.push({
-      date: date.toISOString().split("T")[0],
-      myPrice: 299,
-      amazonPrice: 299 - Math.random() * 20,
-      bestbuyPrice: 305 - Math.random() * 10,
+interface CachedProduct {
+  id: string;
+  name: string;
+  brand: string | null;
+  dosage: string | null;
+  url: string;
+  marketplace: string;
+  price: number;
+  originalPrice: number | null;
+  discountPercent: number | null;
+  inStock: boolean;
+  quantity: number;
+  pricePerUnit: number;
+  scrapedAt: string | null;
+}
+
+// Transform cached products from DB into UI Product format
+// Groups products by name similarity and creates Competitor entries
+function transformCachedProducts(cachedProducts: CachedProduct[]): Product[] {
+  // Group by marketplace
+  const medsgo = cachedProducts.filter(
+    (p) => p.marketplace.toLowerCase() === "medsgo"
+  );
+  const watsons = cachedProducts.filter(
+    (p) => p.marketplace.toLowerCase() === "watsons"
+  );
+
+  // Helper to normalize and tokenize names for matching
+  const normalize = (s: string) =>
+    (s || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const tokens = (s: string) =>
+    Array.from(new Set(normalize(s).split(" ").filter(Boolean)));
+
+  const usedWatsons = new Set<string>();
+  const mapped: Product[] = [];
+  let idx = 1;
+
+  // Match MedsGo products with Watsons products
+  for (const m of medsgo) {
+    const mTokens = tokens(m.name);
+    let best: CachedProduct | null = null;
+    let bestScore = 0;
+
+    for (const w of watsons) {
+      if (usedWatsons.has(w.id)) continue;
+      const wTokens = tokens(w.name);
+      const common = mTokens.filter((t) => wTokens.includes(t));
+      const score = common.length;
+      if (score > bestScore) {
+        bestScore = score;
+        best = w;
+      }
+    }
+
+    const competitors: Competitor[] = [];
+    competitors.push({
+      name: "medsgo",
+      price: m.price,
+      pricePerUnit: m.pricePerUnit,
+      quantity: m.quantity,
+      url: m.url,
+      marketplace: "medsgo",
+      brand: m.brand || undefined,
+      dosage: m.dosage || undefined,
+    });
+
+    if (best && bestScore >= Math.max(1, Math.floor(mTokens.length / 3))) {
+      usedWatsons.add(best.id);
+      competitors.push({
+        name: "watsons",
+        price: best.price,
+        pricePerUnit: best.pricePerUnit,
+        quantity: best.quantity,
+        url: best.url,
+        marketplace: "watsons",
+        brand: best.brand || undefined,
+        dosage: best.dosage || undefined,
+      });
+    }
+
+    const marketAvg =
+      competitors.reduce((s, c) => s + (c.pricePerUnit || c.price || 0), 0) /
+      Math.max(1, competitors.length);
+
+    mapped.push({
+      id: `c-${idx++}`,
+      name: m.name,
+      sku: m.id,
+      myPrice: Math.round(marketAvg * 100) / 100,
+      competitors,
+      history: GENERATE_HISTORY_FROM_COMPETITORS(competitors),
+      status:
+        competitors.length > 1
+          ? Math.min(...competitors.map((c) => c.price)) < marketAvg * 0.95
+            ? "Critical"
+            : "Stable"
+          : "Monitoring",
     });
   }
-  // Simulate a recent drop for Amazon
-  if (data.length > 0) {
-    data[data.length - 1].amazonPrice = 265;
-    data[data.length - 2].amazonPrice = 270;
+
+  // Add remaining unmatched Watsons products
+  for (const w of watsons) {
+    if (usedWatsons.has(w.id)) continue;
+    const competitors: Competitor[] = [
+      {
+        name: "watsons",
+        price: w.price,
+        pricePerUnit: w.pricePerUnit,
+        quantity: w.quantity,
+        url: w.url,
+        marketplace: "watsons",
+        brand: w.brand || undefined,
+        dosage: w.dosage || undefined,
+      },
+    ];
+    const marketAvg =
+      competitors.reduce((s, c) => s + (c.pricePerUnit || c.price || 0), 0) /
+      Math.max(1, competitors.length);
+
+    mapped.push({
+      id: `c-${idx++}`,
+      name: w.name,
+      sku: w.id,
+      myPrice: Math.round(marketAvg * 100) / 100,
+      competitors,
+      history: GENERATE_HISTORY_FROM_COMPETITORS(competitors),
+      status: "Monitoring",
+    });
   }
-  return data;
-};
+
+  return mapped;
+}
+
+// --- HISTORY GENERATOR ---
 
 // Generate a synthetic 30-day history from current competitor prices
-const GENERATE_HISTORY_FROM_COMPETITORS = (competitors: Competitor[], days = 30): HistoryData[] => {
+const GENERATE_HISTORY_FROM_COMPETITORS = (
+  competitors: Competitor[],
+  days = 30
+): HistoryData[] => {
   const data: HistoryData[] = [];
   const today = new Date();
 
   // pick reference prices
-  const medsgo = competitors.find(c => (c.marketplace || c.name || '').toString().toLowerCase() === 'medsgo');
-  const watsons = competitors.find(c => (c.marketplace || c.name || '').toString().toLowerCase() === 'watsons');
-  const baseMed = medsgo ? medsgo.price : (competitors[0]?.price ?? 0);
-  const baseWat = watsons ? watsons.price : (competitors[1]?.price ?? baseMed);
-  const marketAvg = competitors.length > 0 ? competitors.reduce((s,c)=>s+(c.price||0),0)/competitors.length : (baseMed + baseWat)/2;
+  const medsgo = competitors.find(
+    (c) => (c.marketplace || c.name || "").toString().toLowerCase() === "medsgo"
+  );
+  const watsons = competitors.find(
+    (c) =>
+      (c.marketplace || c.name || "").toString().toLowerCase() === "watsons"
+  );
+  // Use pricePerUnit for fair comparison (e.g., ₱85/tablet instead of ₱680/pack)
+  const baseMed = medsgo
+    ? medsgo.pricePerUnit || medsgo.price
+    : competitors[0]?.pricePerUnit ?? competitors[0]?.price ?? 0;
+  const baseWat = watsons
+    ? watsons.pricePerUnit || watsons.price
+    : competitors[1]?.pricePerUnit ?? competitors[1]?.price ?? baseMed;
+  const marketAvg =
+    competitors.length > 0
+      ? competitors.reduce((s, c) => s + (c.pricePerUnit || c.price || 0), 0) /
+        competitors.length
+      : (baseMed + baseWat) / 2;
 
   for (let i = days; i >= 0; i--) {
     const date = new Date(today);
     date.setDate(date.getDate() - i);
 
     // create small random walk around base prices
-    const noise = (seed: number) => ((Math.sin((date.getTime()/86400000) + seed) + (Math.random()-0.5)) * 0.02);
-    const myPrice = Math.round((marketAvg * (1 + noise(1))) * 100) / 100;
-    const medsgoPrice = Math.round((baseMed * (1 + noise(2))) * 100) / 100;
-    const watsonsPrice = Math.round((baseWat * (1 + noise(3))) * 100) / 100;
+    const noise = (seed: number) =>
+      (Math.sin(date.getTime() / 86400000 + seed) + (Math.random() - 0.5)) *
+      0.02;
+    const myPrice = Math.round(marketAvg * (1 + noise(1)) * 100) / 100;
+    const medsgoPrice = Math.round(baseMed * (1 + noise(2)) * 100) / 100;
+    const watsonsPrice = Math.round(baseWat * (1 + noise(3)) * 100) / 100;
 
     data.push({
-      date: date.toISOString().split('T')[0],
+      date: date.toISOString().split("T")[0],
       myPrice,
       medsgoPrice,
       watsonsPrice,
@@ -170,130 +307,7 @@ const GENERATE_HISTORY_FROM_COMPETITORS = (competitors: Competitor[], days = 30)
   return data;
 };
 
-const INITIAL_PRODUCTS: Product[] = [
-  {
-    id: 1,
-    name: "Sony WH-1000XM5 Headphones",
-    sku: "SNY-XM5-BLK",
-    myPrice: 299.0,
-    competitors: [
-      { name: "Amazon", price: 265.0, url: "#" },
-      { name: "BestBuy", price: 299.99, url: "#" },
-      { name: "Walmart", price: 289.0, url: "#" },
-    ],
-    history: GENERATE_HISTORY(),
-    category: "Audio",
-    status: "Critical",
-  },
-  {
-    id: 2,
-    name: "Logitech MX Master 3S",
-    sku: "LOG-MX3S-GRY",
-    myPrice: 99.0,
-    competitors: [
-      { name: "Amazon", price: 99.0, url: "#" },
-      { name: "BestBuy", price: 105.0, url: "#" },
-      { name: "Walmart", price: 95.0, url: "#" },
-    ],
-    history: GENERATE_HISTORY().map((d) => ({
-      ...d,
-      myPrice: 99,
-      amazonPrice: 99,
-      bestbuyPrice: 105,
-    })),
-    category: "Peripherals",
-    status: "Stable",
-  },
-  {
-    id: 3,
-    name: "Samsung T7 Shield 2TB SSD",
-    sku: "SAM-T7-2TB",
-    myPrice: 160.0,
-    competitors: [
-      { name: "Amazon", price: 175.0, url: "#" },
-      { name: "BestBuy", price: 179.0, url: "#" },
-      { name: "Walmart", price: 180.0, url: "#" },
-    ],
-    history: GENERATE_HISTORY().map((d) => ({
-      ...d,
-      myPrice: 160,
-      amazonPrice: 175,
-      bestbuyPrice: 179,
-    })),
-    category: "Storage",
-    status: "Winning",
-  },
-];
-
-// Demo side-by-side comparison data (used when no live MedsGo+Watsons intersection)
-const SAMPLE_COMPARE: Product[] = [
-  {
-    id: "demo-1",
-    name: "Sildenafil 50mg - 1 Box x 8 Tabs (Erecfil 50)",
-    sku: "demo-sild-50-8",
-    competitors: [
-      {
-        name: "medsgo",
-        marketplace: "medsgo",
-        price: 680,
-        quantity: 8,
-        pricePerUnit: 85,
-      },
-      {
-        name: "watsons",
-        marketplace: "watsons",
-        price: 835,
-        quantity: 1,
-        pricePerUnit: 835,
-      },
-    ],
-    status: "Monitoring",
-  },
-  {
-    id: "demo-2",
-    name: "Sildenafil 100mg - 1 Box x 10 Tabs (Spiagra 100)",
-    sku: "demo-sild-100-10",
-    competitors: [
-      {
-        name: "medsgo",
-        marketplace: "medsgo",
-        price: 950,
-        quantity: 10,
-        pricePerUnit: 95,
-      },
-      {
-        name: "watsons",
-        marketplace: "watsons",
-        price: 1002.5,
-        quantity: 1,
-        pricePerUnit: 1002.5,
-      },
-    ],
-    status: "Monitoring",
-  },
-  {
-    id: "demo-3",
-    name: "Tadalafil 20mg - 1 Tablet (Dalafil)",
-    sku: "demo-tada-20",
-    competitors: [
-      {
-        name: "medsgo",
-        marketplace: "medsgo",
-        price: 90,
-        quantity: 1,
-        pricePerUnit: 90,
-      },
-      {
-        name: "watsons",
-        marketplace: "watsons",
-        price: 985.25,
-        quantity: 1,
-        pricePerUnit: 985.25,
-      },
-    ],
-    status: "Monitoring",
-  },
-];
+// No hardcoded data - all products come from the database
 
 // --- COMPONENTS ---
 
@@ -429,7 +443,7 @@ const ProductChart: React.FC<{ product: Product | null }> = ({ product }) => {
             fontSize={12}
             tickLine={false}
             axisLine={false}
-            tickFormatter={(val: number) => `$${val}`}
+            tickFormatter={(val: number) => `₱${val}`}
           />
           <Tooltip
             contentStyle={{
@@ -444,30 +458,29 @@ const ProductChart: React.FC<{ product: Product | null }> = ({ product }) => {
             product.history.some((d) => typeof d.myPrice === "number") && (
               <Line
                 type="monotone"
-                name="My Price"
+                name="Market Avg"
                 dataKey="myPrice"
-                stroke="#3b82f6"
-                strokeWidth={3}
+                stroke="#64748b"
+                strokeWidth={2}
+                strokeDasharray="3 3"
                 dot={false}
-                activeDot={{ r: 6 }}
+                activeDot={{ r: 4 }}
               />
             )}
           <Line
             type="monotone"
-            name="Amazon"
-            dataKey="amazonPrice"
-            stroke="#ef4444"
+            name="MedsGo"
+            dataKey="medsgoPrice"
+            stroke="#7c3aed"
             strokeWidth={2}
-            strokeDasharray="5 5"
             dot={false}
           />
           <Line
             type="monotone"
-            name="BestBuy"
-            dataKey="bestbuyPrice"
-            stroke="#10b981"
+            name="Watsons"
+            dataKey="watsonsPrice"
+            stroke="#0284c7"
             strokeWidth={2}
-            strokeDasharray="5 5"
             dot={false}
           />
         </LineChart>
@@ -477,13 +490,16 @@ const ProductChart: React.FC<{ product: Product | null }> = ({ product }) => {
 };
 
 export default function Dashboard() {
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
+  const [products, setProducts] = useState<Product[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isScanning, setIsScanning] = useState<boolean>(false);
+  const [isLoadingCached, setIsLoadingCached] = useState<boolean>(true);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [lastScanAt, setLastScanAt] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'alerts'>('overview');
-  const [expandedView, setExpandedView] = useState<'links' | 'history'>('links');
+  const [activeTab, setActiveTab] = useState<"overview" | "alerts">("overview");
+  const [expandedView, setExpandedView] = useState<"links" | "history">(
+    "links"
+  );
 
   // Calculate high-level stats (using price per unit)
   const totalProducts = products.length;
@@ -556,7 +572,7 @@ export default function Dashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           marketplace: "all",
-          saveToDb: false,
+          saveToDb: true,
           includeProducts: true,
         }),
       });
@@ -652,7 +668,12 @@ export default function Dashboard() {
           myPrice: Math.round(marketAvg * 100) / 100,
           competitors,
           history: GENERATE_HISTORY_FROM_COMPETITORS(competitors),
-          status: competitors.length > 1 ? (Math.min(...competitors.map(c => c.price)) < marketAvg * 0.95 ? 'Critical' : 'Stable') : 'Monitoring'
+          status:
+            competitors.length > 1
+              ? Math.min(...competitors.map((c) => c.price)) < marketAvg * 0.95
+                ? "Critical"
+                : "Stable"
+              : "Monitoring",
         });
       }
 
@@ -686,7 +707,7 @@ export default function Dashboard() {
           myPrice: Math.round(marketAvg * 100) / 100,
           competitors,
           history: GENERATE_HISTORY_FROM_COMPETITORS(competitors),
-          status: 'Monitoring'
+          status: "Monitoring",
         });
       }
 
@@ -699,8 +720,34 @@ export default function Dashboard() {
     }
   };
 
-  // Run an initial scan on mount to populate the main UI with scraped data
+  // Load cached data first, then run background scrape
   useEffect(() => {
+    // 1. First, load cached data from DB (fast)
+    const loadCachedData = async () => {
+      try {
+        const res = await fetch("/api/products");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.products?.length > 0) {
+            const transformed = transformCachedProducts(data.products);
+            if (transformed.length > 0) {
+              setProducts(transformed);
+              if (data.lastScrapedAt) {
+                setLastScanAt(data.lastScrapedAt);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load cached data:", err);
+      } finally {
+        setIsLoadingCached(false);
+      }
+    };
+
+    loadCachedData();
+
+    // 2. Then trigger background scrape to get fresh data
     handleScan();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -728,7 +775,8 @@ export default function Dashboard() {
       maximumFractionDigits: 2,
     }).format(val);
 
-  // Precompute display rows for MedsGo/Watsons comparison to avoid an IIFE inside JSX
+  // Precompute display rows for MedsGo/Watsons comparison
+  // Show products that have both marketplaces first, then all products
   const medsgoWatsonsFiltered = products.filter((p) => {
     const names = (p.competitors || []).map((c) =>
       (c.marketplace || "").toLowerCase()
@@ -736,7 +784,7 @@ export default function Dashboard() {
     return names.includes("medsgo") && names.includes("watsons");
   });
   const tableDisplay =
-    medsgoWatsonsFiltered.length > 0 ? medsgoWatsonsFiltered : SAMPLE_COMPARE;
+    medsgoWatsonsFiltered.length > 0 ? medsgoWatsonsFiltered : products;
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
@@ -809,14 +857,42 @@ export default function Dashboard() {
               )}
             </button>
           </div>
-          <div className="text-sm text-slate-500">
-            Last scan:{" "}
-            {lastScanAt ? new Date(lastScanAt).toLocaleString() : "never"}
+          <div className="text-sm text-slate-500 flex items-center gap-2">
+            {isLoadingCached ? (
+              <span className="flex items-center gap-1">
+                <RefreshCw className="w-3 h-3 animate-spin" />
+                Loading cached data...
+              </span>
+            ) : isScanning ? (
+              <span className="flex items-center gap-1">
+                <RefreshCw className="w-3 h-3 animate-spin text-blue-500" />
+                <span className="text-blue-600">Refreshing prices...</span>
+              </span>
+            ) : (
+              <span>
+                Last scan:{" "}
+                {lastScanAt ? new Date(lastScanAt).toLocaleString() : "never"}
+              </span>
+            )}
           </div>
         </div>
 
         {activeTab === "overview" && (
           <>
+            {/* LOADING / REFRESH BANNER */}
+            {isLoadingCached && (
+              <div className="mb-4 p-3 bg-slate-100 border border-slate-200 rounded-lg flex items-center gap-2 text-sm text-slate-600">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Loading cached prices from database...
+              </div>
+            )}
+            {!isLoadingCached && isScanning && (
+              <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-lg flex items-center gap-2 text-sm text-blue-700">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Refreshing prices from MedsGo and Watsons in the background...
+              </div>
+            )}
+
             {/* KPI SECTION */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
               <KpiCard
@@ -863,144 +939,361 @@ export default function Dashboard() {
                   />
                 </div>
               </div>
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
-                <tr>
-                  <th className="px-6 py-4 w-2/5">Product</th>
-                  <th className="px-6 py-4">MedsGo</th>
-                  <th className="px-6 py-4">Watsons</th>
-                  <th className="px-6 py-4">Difference</th>
-                  <th className="px-6 py-4">Cheapest</th>
-                  <th className="px-6 py-4 text-right">Market Avg</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tableDisplay.map((product, idx) => {
-                  const medsgo = product.competitors.find(c => (c.marketplace || '').toLowerCase() === 'medsgo');
-                  const watsons = product.competitors.find(c => (c.marketplace || '').toLowerCase() === 'watsons');
-                  const marketAvg = product.competitors.length > 0 ? product.competitors.reduce((acc, c) => acc + c.price, 0) / product.competitors.length : 0;
-                  const diff = medsgo && watsons ? Math.round((medsgo.price - watsons.price) * 100) / 100 : 0;
-                  const diffPct = watsons && watsons.price ? Math.round((diff / watsons.price) * 1000) / 10 : 0;
-                  const cheapest = product.competitors.reduce((prev, cur) => (cur.price < prev.price ? cur : prev), product.competitors[0]);
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                  <tr>
+                    <th className="px-6 py-4 w-2/5">Product</th>
+                    <th className="px-6 py-4">
+                      MedsGo{" "}
+                      <span className="text-[10px] font-normal">
+                        (per unit)
+                      </span>
+                    </th>
+                    <th className="px-6 py-4">
+                      Watsons{" "}
+                      <span className="text-[10px] font-normal">
+                        (per unit)
+                      </span>
+                    </th>
+                    <th className="px-6 py-4">Difference</th>
+                    <th className="px-6 py-4">Cheapest</th>
+                    <th className="px-6 py-4 text-right">Avg/Unit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableDisplay.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center">
+                        <div className="text-slate-400">
+                          {isLoadingCached ? (
+                            <div className="flex flex-col items-center gap-2">
+                              <RefreshCw className="w-6 h-6 animate-spin" />
+                              <span>Loading products from database...</span>
+                            </div>
+                          ) : isScanning ? (
+                            <div className="flex flex-col items-center gap-2">
+                              <RefreshCw className="w-6 h-6 animate-spin text-blue-500" />
+                              <span className="text-blue-600">
+                                Scraping prices from MedsGo and Watsons...
+                              </span>
+                              <span className="text-sm">
+                                This may take a minute on first load.
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center gap-2">
+                              <span>No products found.</span>
+                              <button
+                                onClick={handleScan}
+                                className="mt-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-800"
+                              >
+                                Scan for Products
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  {tableDisplay.map((product, idx) => {
+                    const medsgo = product.competitors.find(
+                      (c) => (c.marketplace || "").toLowerCase() === "medsgo"
+                    );
+                    const watsons = product.competitors.find(
+                      (c) => (c.marketplace || "").toLowerCase() === "watsons"
+                    );
+                    // Use price per unit for fair comparison across different pack sizes
+                    const medsgoUnit =
+                      medsgo?.pricePerUnit || medsgo?.price || 0;
+                    const watsonsUnit =
+                      watsons?.pricePerUnit || watsons?.price || 0;
+                    const marketAvg =
+                      product.competitors.length > 0
+                        ? product.competitors.reduce(
+                            (acc, c) => acc + (c.pricePerUnit || c.price),
+                            0
+                          ) / product.competitors.length
+                        : 0;
+                    const diff =
+                      medsgo && watsons
+                        ? Math.round((medsgoUnit - watsonsUnit) * 100) / 100
+                        : 0;
+                    const diffPct = watsonsUnit
+                      ? Math.round((diff / watsonsUnit) * 1000) / 10
+                      : 0;
+                    const cheapest = product.competitors.reduce(
+                      (prev, cur) =>
+                        (cur.pricePerUnit || cur.price) <
+                        (prev.pricePerUnit || prev.price)
+                          ? cur
+                          : prev,
+                      product.competitors[0]
+                    );
 
-                  return (
-                    <React.Fragment key={product.id}>
-                      <tr
-                        onClick={() => {
-                          if (selectedProduct?.id === product.id) {
-                            setSelectedProduct(null);
-                          } else {
-                            setSelectedProduct(product);
-                            setExpandedView('links');
-                          }
-                        }}
-                        className={`hover:bg-blue-50/50 cursor-pointer transition-colors ${selectedProduct?.id === product.id ? 'bg-blue-50/80' : ''}`}
-                      >
-                        <td className="px-6 py-4">
-                          <div className="font-semibold text-slate-900">{product.name}</div>
-                          <div className="text-slate-500 text-xs mt-0.5">{product.sku}</div>
-                        </td>
-
-                        <td className="px-6 py-4">
-                          <div className={`flex flex-col px-3 py-2 rounded-md border ${medsgo && medsgo.price < marketAvg ? 'bg-rose-50 border-rose-100' : 'bg-slate-50 border-slate-100'}`}>
-                            <div className="text-[10px] text-slate-500 uppercase font-bold">MEDSGO</div>
-                            <div className={`font-semibold ${medsgo && medsgo.price < marketAvg ? 'text-rose-700' : 'text-emerald-600'}`}>{medsgo ? formatCurrencyPHP(medsgo.price) : '—'}</div>
-                            <div className="text-[11px] text-slate-400 mt-1">{medsgo?.brand || medsgo?.dosage || ''}</div>
-                          </div>
-                        </td>
-
-                        <td className="px-6 py-4">
-                          <div className={`flex flex-col px-3 py-2 rounded-md border ${watsons && watsons.price < marketAvg ? 'bg-rose-50 border-rose-100' : 'bg-slate-50 border-slate-100'}`}>
-                            <div className="text-[10px] text-slate-500 uppercase font-bold">WATSONS</div>
-                            <div className={`font-semibold ${watsons && watsons.price < marketAvg ? 'text-rose-700' : 'text-emerald-600'}`}>{watsons ? formatCurrencyPHP(watsons.price) : '—'}</div>
-                            <div className="text-[11px] text-slate-400 mt-1">{watsons?.brand || watsons?.dosage || ''}</div>
-                          </div>
-                        </td>
-
-                        <td className="px-6 py-4">
-                          <div className="text-right">
-                            {typeof diff === 'number' ? (
-                              <div className={`font-semibold ${diff < 0 ? 'text-emerald-500' : 'text-rose-600'}`}>{diff < 0 ? '' : '+'}{formatCurrencyPHP(Math.abs(diff))}</div>
-                            ) : '—'}
-                            <div className={`text-xs ${diffPct < 0 ? 'text-emerald-500' : 'text-rose-600'}`}>{diffPct ? `${diffPct > 0 ? '+' : ''}${diffPct.toFixed(1)}%` : ''}</div>
-                          </div>
-                        </td>
-
-                        <td className="px-6 py-4">
-                          <div className="flex justify-start">
-                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${cheapest.marketplace === 'medsgo' ? 'bg-purple-700 text-white' : 'bg-sky-700 text-white'}`}>
-                              {cheapest.marketplace?.toUpperCase()}
-                            </span>
-                          </div>
-                        </td>
-
-                        <td className="px-6 py-4 text-right text-slate-600">
-                          {formatCurrencyPHP(marketAvg)}
-                        </td>
-                      </tr>
-
-                      {selectedProduct?.id === product.id && (
-                        <tr className="bg-slate-50/50">
-                          <td colSpan={6} className="px-6 py-4 border-b border-slate-200">
-                            <div className="bg-white rounded-lg border border-slate-200 p-4 shadow-sm">
-                              <div className="flex justify-between items-center mb-2">
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    onClick={() => setExpandedView('links')}
-                                    className={`px-3 py-1 rounded-md text-sm ${expandedView === 'links' ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-600'}`}
-                                  >
-                                    Links
-                                  </button>
-                                  <button
-                                    onClick={() => setExpandedView('history')}
-                                    className={`px-3 py-1 rounded-md text-sm ${expandedView === 'history' ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-600'}`}
-                                  >
-                                    History
-                                  </button>
-                                </div>
-                                <div>
-                                  <button className="text-blue-600 text-xs font-medium hover:underline mr-3" onClick={() => window.open(product.competitors[0]?.url || '#', '_blank')}>Open Top Result</button>
-                                  <button className="text-sm text-slate-600" onClick={() => setSelectedProduct(null)}>Close</button>
-                                </div>
-                              </div>
-
-                              {expandedView === 'links' ? (
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                  {product.competitors.map((c, i) => (
-                                    <div key={i} className="p-3 border rounded-md bg-slate-50">
-                                      <div className="flex items-center justify-between">
-                                        <div>
-                                          <div className="text-sm font-semibold text-slate-800">{(c.marketplace || c.name || '').toString().toUpperCase()}</div>
-                                          <div className="text-xs text-slate-500">{c.brand || c.dosage || ''}</div>
-                                          <div className="text-sm font-medium mt-1">{formatCurrencyPHP(c.price)}</div>
-                                        </div>
-                                        <div className="ml-4">
-                                          {c.url ? (
-                                            <a href={c.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 px-3 py-1 rounded bg-slate-900 text-white text-xs">Open</a>
-                                          ) : (
-                                            <span className="text-xs text-slate-400">No URL</span>
-                                          )}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div>
-                                  <ProductChart product={product} />
-                                </div>
-                              )}
+                    return (
+                      <React.Fragment key={product.id}>
+                        <tr
+                          onClick={() => {
+                            if (selectedProduct?.id === product.id) {
+                              setSelectedProduct(null);
+                            } else {
+                              setSelectedProduct(product);
+                              setExpandedView("links");
+                            }
+                          }}
+                          className={`hover:bg-blue-50/50 cursor-pointer transition-colors ${
+                            selectedProduct?.id === product.id
+                              ? "bg-blue-50/80"
+                              : ""
+                          }`}
+                        >
+                          <td className="px-6 py-4">
+                            <div className="font-semibold text-slate-900">
+                              {product.name}
+                            </div>
+                            <div className="text-slate-500 text-xs mt-0.5">
+                              {product.sku}
                             </div>
                           </td>
+
+                          <td className="px-6 py-4">
+                            <div
+                              className={`flex flex-col px-3 py-2 rounded-md border ${
+                                medsgo && medsgoUnit < marketAvg
+                                  ? "bg-rose-50 border-rose-100"
+                                  : "bg-slate-50 border-slate-100"
+                              }`}
+                            >
+                              <div className="text-[10px] text-slate-500 uppercase font-bold">
+                                MEDSGO
+                              </div>
+                              <div
+                                className={`font-semibold ${
+                                  medsgo && medsgoUnit < marketAvg
+                                    ? "text-rose-700"
+                                    : "text-emerald-600"
+                                }`}
+                              >
+                                {medsgo ? formatCurrencyPHP(medsgoUnit) : "—"}
+                              </div>
+                              <div className="text-[10px] text-slate-400 mt-0.5">
+                                {medsgo
+                                  ? `${medsgo.quantity || 1} tab${
+                                      (medsgo.quantity || 1) > 1 ? "s" : ""
+                                    } @ ${formatCurrencyPHP(medsgo.price)}`
+                                  : ""}
+                              </div>
+                              <div className="text-[11px] text-slate-400">
+                                {medsgo?.brand || medsgo?.dosage || ""}
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="px-6 py-4">
+                            <div
+                              className={`flex flex-col px-3 py-2 rounded-md border ${
+                                watsons && watsonsUnit < marketAvg
+                                  ? "bg-rose-50 border-rose-100"
+                                  : "bg-slate-50 border-slate-100"
+                              }`}
+                            >
+                              <div className="text-[10px] text-slate-500 uppercase font-bold">
+                                WATSONS
+                              </div>
+                              <div
+                                className={`font-semibold ${
+                                  watsons && watsonsUnit < marketAvg
+                                    ? "text-rose-700"
+                                    : "text-emerald-600"
+                                }`}
+                              >
+                                {watsons ? formatCurrencyPHP(watsonsUnit) : "—"}
+                              </div>
+                              <div className="text-[10px] text-slate-400 mt-0.5">
+                                {watsons
+                                  ? `${watsons.quantity || 1} tab${
+                                      (watsons.quantity || 1) > 1 ? "s" : ""
+                                    } @ ${formatCurrencyPHP(watsons.price)}`
+                                  : ""}
+                              </div>
+                              <div className="text-[11px] text-slate-400">
+                                {watsons?.brand || watsons?.dosage || ""}
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="px-6 py-4">
+                            <div className="text-right">
+                              {typeof diff === "number" ? (
+                                <div
+                                  className={`font-semibold ${
+                                    diff < 0
+                                      ? "text-emerald-500"
+                                      : "text-rose-600"
+                                  }`}
+                                >
+                                  {diff < 0 ? "" : "+"}
+                                  {formatCurrencyPHP(Math.abs(diff))}
+                                </div>
+                              ) : (
+                                "—"
+                              )}
+                              <div
+                                className={`text-xs ${
+                                  diffPct < 0
+                                    ? "text-emerald-500"
+                                    : "text-rose-600"
+                                }`}
+                              >
+                                {diffPct
+                                  ? `${diffPct > 0 ? "+" : ""}${diffPct.toFixed(
+                                      1
+                                    )}%`
+                                  : ""}
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="px-6 py-4">
+                            <div className="flex justify-start">
+                              <span
+                                className={`px-3 py-1 rounded-full text-xs font-medium ${
+                                  cheapest.marketplace === "medsgo"
+                                    ? "bg-purple-700 text-white"
+                                    : "bg-sky-700 text-white"
+                                }`}
+                              >
+                                {cheapest.marketplace?.toUpperCase()}
+                              </span>
+                            </div>
+                          </td>
+
+                          <td className="px-6 py-4 text-right text-slate-600">
+                            {formatCurrencyPHP(marketAvg)}
+                          </td>
                         </tr>
-                      )}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </>
+
+                        {selectedProduct?.id === product.id && (
+                          <tr className="bg-slate-50/50">
+                            <td
+                              colSpan={6}
+                              className="px-6 py-4 border-b border-slate-200"
+                            >
+                              <div className="bg-white rounded-lg border border-slate-200 p-4 shadow-sm">
+                                <div className="flex justify-between items-center mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={() => setExpandedView("links")}
+                                      className={`px-3 py-1 rounded-md text-sm ${
+                                        expandedView === "links"
+                                          ? "bg-slate-900 text-white"
+                                          : "bg-slate-50 text-slate-600"
+                                      }`}
+                                    >
+                                      Links
+                                    </button>
+                                    <button
+                                      onClick={() => setExpandedView("history")}
+                                      className={`px-3 py-1 rounded-md text-sm ${
+                                        expandedView === "history"
+                                          ? "bg-slate-900 text-white"
+                                          : "bg-slate-50 text-slate-600"
+                                      }`}
+                                    >
+                                      History
+                                    </button>
+                                  </div>
+                                  <div>
+                                    <button
+                                      className="text-blue-600 text-xs font-medium hover:underline mr-3"
+                                      onClick={() =>
+                                        window.open(
+                                          product.competitors[0]?.url || "#",
+                                          "_blank"
+                                        )
+                                      }
+                                    >
+                                      Open Top Result
+                                    </button>
+                                    <button
+                                      className="text-sm text-slate-600"
+                                      onClick={() => setSelectedProduct(null)}
+                                    >
+                                      Close
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {expandedView === "links" ? (
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                    {product.competitors.map((c, i) => (
+                                      <div
+                                        key={i}
+                                        className="p-3 border rounded-md bg-slate-50"
+                                      >
+                                        <div className="flex items-center justify-between">
+                                          <div>
+                                            <div className="text-sm font-semibold text-slate-800">
+                                              {(c.marketplace || c.name || "")
+                                                .toString()
+                                                .toUpperCase()}
+                                            </div>
+                                            <div className="text-xs text-slate-500">
+                                              {c.brand || c.dosage || ""}
+                                            </div>
+                                            <div className="text-sm font-medium mt-1">
+                                              {formatCurrencyPHP(
+                                                c.pricePerUnit || c.price
+                                              )}
+                                              <span className="text-slate-400 font-normal">
+                                                /unit
+                                              </span>
+                                            </div>
+                                            <div className="text-[11px] text-slate-400">
+                                              {c.quantity || 1} tablet
+                                              {(c.quantity || 1) > 1
+                                                ? "s"
+                                                : ""}{" "}
+                                              @ {formatCurrencyPHP(c.price)}{" "}
+                                              total
+                                            </div>
+                                          </div>
+                                          <div className="ml-4">
+                                            {c.url ? (
+                                              <a
+                                                href={c.url}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="inline-flex items-center gap-2 px-3 py-1 rounded bg-slate-900 text-white text-xs"
+                                              >
+                                                Open
+                                              </a>
+                                            ) : (
+                                              <span className="text-xs text-slate-400">
+                                                No URL
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <ProductChart product={product} />
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
 
         {activeTab === "alerts" && (
